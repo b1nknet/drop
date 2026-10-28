@@ -1,0 +1,28 @@
+{
+  "name": "drop-dev-tools",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "format": "npm run format:python && npm run format:web",
+    "format:python": "uv run --locked ruff format .",
+    "format:web": "prettier --write .",
+    "format:check": "npm run format:check:python && npm run format:check:web",
+    "format:check:python": "uv run --locked ruff format --check .",
+    "format:check:web": "prettier --check .",
+    "lint": "npm run lint:python && npm run lint:web",
+    "lint:python": "uv run --locked ruff check .",
+    "lint:web": "eslint . --max-warnings 0",
+    "lint:fix": "uv run --locked ruff check --fix . && eslint . --fix && npm run format",
+    "test": "uv run --locked python -m pytest -q",
+    "check": "npm run lint && npm run format:check && npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
+    "prettier": "3.9.10"
+  }
+}

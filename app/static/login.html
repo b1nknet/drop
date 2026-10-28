@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#101622" />
+    <title>로그인 · drop</title>
+    <link rel="icon" href="/assets/mark.svg" type="image/svg+xml" />
+    <script src="/assets/theme.js"></script>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-jp-dynamic-subset.min.css"
+      crossorigin
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+      crossorigin
+    />
+    <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/login.js" defer></script>
+  </head>
+  <body class="login-body">
+    <a class="login-brand brand" href="/login"
+      ><img src="/assets/mark.svg" alt="" width="38" height="38" /><span
+        >drop<span class="brand-dot">.</span></span
+      ></a
+    >
+    <button
+      class="text-button theme-toggle login-theme-toggle"
+      type="button"
+      aria-label="라이트 모드로 전환"
+      title="라이트 모드로 전환"
+    >
+      <svg class="theme-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.6" />
+        <path
+          d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+        />
+      </svg>
+      <svg class="theme-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linejoin="round"
+        />
+      </svg>
+      <span data-theme-label>라이트 모드</span>
+    </button>
+    <main class="login-layout">
+      <section class="login-card" aria-labelledby="login-title">
+        <div class="lock-badge">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect
+              x="5"
+              y="10"
+              width="14"
+              height="11"
+              rx="3"
+              stroke="currentColor"
+              stroke-width="1.7"
+            />
+            <path
+              d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+            />
+          </svg>
+        </div>
+        <h2 id="login-title">반가워요.</h2>
+        <p class="muted">비밀번호를 입력해 로그인하세요.</p>
+        <form id="login-form">
+          <label for="password">비밀번호</label>
+          <div class="password-field">
+            <input
+              id="password"
+              type="password"
+              name="password"
+              placeholder="비밀번호를 입력하세요"
+              autocomplete="current-password"
+              required
+              maxlength="1024"
+              aria-describedby="login-error"
+              autofocus
+            /><button
+              type="button"
+              id="toggle-password"
+              aria-label="비밀번호 표시"
+              aria-pressed="false"
+            >
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
+                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6" />
+              </svg>
+            </button>
+          </div>
+          <p id="login-error" class="form-error" role="alert"></p>
+          <button class="primary login-submit" type="submit">
+            <span>로그인</span
+            ><svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M5 12h14m-6-6 6 6-6 6"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </form>
+      </section>
+    </main>
+    <footer class="login-footer">b1nk, 2026</footer>
+  </body>
+</html>
