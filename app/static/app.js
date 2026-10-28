@@ -8,6 +8,8 @@ const state = {
   expired: false,
   loaded: false,
   deleting: new Set(),
+  settings: null,
+  savingSettings: false,
 };
 const paths = {
   download: 'M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4',
@@ -107,7 +109,27 @@ function renderFiles() {
     badge.setAttribute('aria-hidden', 'true');
     const name = element('span', 'file-name', file.name);
     name.title = file.name;
-    nameWrap.append(badge, name);
+    const info = element('div', 'file-info');
+    info.append(name);
+    if (file.expires_at != null) {
+      const expires = new Date(file.expires_at * 1000);
+      const expiry = element(
+        'span',
+        'file-expiry',
+        expires.getTime() <= Date.now()
+          ? '자동 삭제 대기 중'
+          : `${new Intl.DateTimeFormat('ko-KR', {
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            }).format(expires)} 삭제 예정`,
+      );
+      expiry.title = `${expires.toLocaleString('ko-KR')} 이후 자동 삭제`;
+      info.append(expiry);
+    }
+    nameWrap.append(badge, info);
     nameCell.append(nameWrap);
     const size = element('td', 'file-size', bytes(file.size));
     const date = element(
@@ -191,6 +213,7 @@ async function loadFiles() {
   try {
     const data = await api('/api/files');
     state.files = data.files;
+    applySettings(data.settings);
     state.loaded = true;
     $('#list-error').hidden = true;
     renderFiles();
@@ -205,6 +228,87 @@ async function loadFiles() {
     $('#refresh').disabled = false;
   }
 }
+
+function retentionLabel(hours) {
+  return hours < 24 ? `${hours}시간` : `${hours / 24}일`;
+}
+
+function applySettings(settings) {
+  state.settings = settings;
+  $('#retention-notice').hidden = !settings.enabled;
+  $('#retention-notice').textContent = settings.enabled
+    ? `모든 파일은 마지막 수정 후 ${retentionLabel(settings.retention_hours)}이 지나면 자동 삭제돼요. 삭제는 1분마다 확인하며, 삭제된 파일은 복구할 수 없어요.`
+    : '';
+  for (const file of state.files) {
+    file.expires_at = settings.enabled ? file.modified + settings.retention_hours * 3600 : null;
+  }
+}
+
+function updateSettingsControls() {
+  $('#auto-delete-enabled').disabled = state.savingSettings;
+  $('#retention-hours').disabled = state.savingSettings || !$('#auto-delete-enabled').checked;
+  for (const selector of ['#save-settings', '#cancel-settings', '#close-settings']) {
+    $(selector).disabled = state.savingSettings;
+  }
+  $('#save-settings').textContent = state.savingSettings ? '저장 중…' : '저장';
+  $('#settings-form').setAttribute('aria-busy', String(state.savingSettings));
+}
+
+$('#open-settings').addEventListener('click', async () => {
+  $('#open-settings').disabled = true;
+  try {
+    const settings = await api('/api/settings');
+    applySettings(settings);
+    renderFiles();
+    $('#auto-delete-enabled').checked = settings.enabled;
+    $('#retention-hours').value = String(settings.retention_hours);
+    $('#settings-error').hidden = true;
+    updateSettingsControls();
+    $('#settings-dialog').showModal();
+  } catch (failure) {
+    toast(failure.message);
+  } finally {
+    $('#open-settings').disabled = false;
+  }
+});
+$('#auto-delete-enabled').addEventListener('change', updateSettingsControls);
+for (const selector of ['#close-settings', '#cancel-settings']) {
+  $(selector).addEventListener('click', () => $('#settings-dialog').close());
+}
+$('#settings-dialog').addEventListener('cancel', (event) => {
+  if (state.savingSettings) event.preventDefault();
+});
+$('#settings-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (state.savingSettings) return;
+  state.savingSettings = true;
+  $('#settings-error').hidden = true;
+  updateSettingsControls();
+  try {
+    const settings = await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'X-CSRF-Token': state.csrf, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: $('#auto-delete-enabled').checked,
+        retention_hours: Number($('#retention-hours').value),
+      }),
+    });
+    applySettings(settings);
+    renderFiles();
+    $('#settings-dialog').close();
+    toast('설정을 저장했어요.');
+    await loadFiles();
+  } catch (failure) {
+    $('#settings-error').textContent =
+      failure instanceof TypeError
+        ? '설정 저장 결과를 확인하지 못했어요. 잠시 후 설정창을 다시 열어 확인해 주세요.'
+        : failure.message;
+    $('#settings-error').hidden = false;
+  } finally {
+    state.savingSettings = false;
+    updateSettingsControls();
+  }
+});
 
 function updateJob(job) {
   job.label.textContent =
@@ -424,7 +528,11 @@ async function initialize() {
     state.limit = session.max_upload_bytes;
     $('#upload-limit').textContent = `파일당 최대 ${bytes(state.limit)} · 여러 파일 선택 가능`;
     $('#choose-files').disabled = false;
+    $('#open-settings').disabled = false;
     await loadFiles();
+    setInterval(() => {
+      if (!document.hidden && !state.expired && !$('#refresh').disabled) loadFiles();
+    }, 60_000);
   } catch {
     if (!state.expired) {
       $('#list-error').textContent = '서버에 연결하지 못했어요. 페이지를 새로고침해 주세요.';

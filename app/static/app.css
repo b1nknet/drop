@@ -477,6 +477,12 @@ input:focus-visible {
 .files-heading > .muted {
   font-size: 11px;
 }
+.retention-notice {
+  padding: 0 25px 20px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--muted);
+}
 .file-toolbar {
   padding: 0 25px 20px;
   display: flex;
@@ -587,6 +593,19 @@ tbody tr:hover {
 .file-name {
   font-size: 12px;
   color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.file-expiry {
+  font-size: 9px;
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1240,6 +1259,10 @@ tbody tr:hover {
   .files-heading {
     padding: 21px 17px 17px;
   }
+  .retention-notice {
+    padding-inline: 17px;
+    font-size: 10px;
+  }
   .files-title h2 {
     font-size: 14px;
   }
@@ -1528,4 +1551,133 @@ td:last-child {
   .topbar .theme-toggle [data-theme-label] {
     display: none;
   }
+}
+
+/* Settings */
+.settings-dialog {
+  width: min(460px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 24px 80px var(--shadow);
+}
+.settings-dialog::backdrop {
+  background: #080e1cb3;
+  backdrop-filter: blur(4px);
+}
+.settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-heading h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+.settings-heading .icon-button {
+  font-size: 24px;
+}
+.settings-content {
+  padding: 24px;
+}
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.settings-content label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-toggle-row p,
+.settings-period p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.settings-switch {
+  appearance: none;
+  position: relative;
+  width: 42px;
+  height: 24px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--muted);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.settings-switch::before {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  top: 2px;
+  left: 2px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.settings-switch:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.settings-switch:checked::before {
+  transform: translateX(18px);
+}
+.settings-period {
+  margin-top: 26px;
+}
+.settings-period label {
+  display: block;
+  margin-bottom: 10px;
+}
+.settings-period select {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+.settings-period select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.settings-warning {
+  margin: 22px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.8;
+}
+.settings-error {
+  margin: 14px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.8;
+}
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--line);
+}
+.settings-actions button {
+  min-height: 40px;
+  padding: 0 18px;
+  font-size: 12px;
 }
