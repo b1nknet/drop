@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import stat
@@ -22,11 +23,15 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from pydantic import BaseModel, Field
 from starlette.requests import ClientDisconnect
 
+from app.settings import AutoDeleteSettings, load_settings, save_settings
+
 ASSETS = Path(__file__).parent / "static"
 COOKIE_NAME = "drop_session"
 LOGIN_WINDOW = 300
 LOGIN_ATTEMPTS = 5
 CHUNK_SIZE = 256 * 1024
+CLEANUP_INTERVAL_SECONDS = 60
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -56,6 +61,44 @@ def valid_name(name: str) -> str:
     return name
 
 
+def cleanup_expired_files(
+    root: Path, settings: AutoDeleteSettings, file_lock: threading.Lock
+) -> int:
+    with file_lock:
+        if not settings.enabled:
+            return 0
+    removed = 0
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                try:
+                    valid_name(entry.name)
+                except HTTPException:
+                    continue
+                try:
+                    # 앱의 삭제·업로드와 겹쳐도 현재 경로의 파일을 확인한 뒤 삭제합니다.
+                    with file_lock:
+                        # 설정 저장과 같은 잠금을 사용해 끄기·기간 변경을 즉시 반영합니다.
+                        if not settings.enabled:
+                            break
+                        cutoff = time.time() - settings.retention_hours * 3600
+                        path = root / entry.name
+                        info = path.stat(follow_symlinks=False)
+                        if not stat.S_ISREG(info.st_mode) or info.st_mtime > cutoff:
+                            continue
+                        path.unlink()
+                    removed += 1
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    logger.warning("파일을 자동 삭제하지 못했습니다: %r", entry.name, exc_info=True)
+    except OSError:
+        logger.warning("자동 삭제를 위한 저장 폴더를 읽지 못했습니다.", exc_info=True)
+    if removed:
+        logger.info("보관 기간이 지난 파일 %d개를 자동 삭제했습니다.", removed)
+    return removed
+
+
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -67,8 +110,13 @@ def create_app() -> FastAPI:
             raise RuntimeError("임시 저장 폴더는 심볼릭 링크일 수 없습니다.")
         temporary.mkdir(mode=0o700, exist_ok=True)
         # 단일 worker 전용: 이전 프로세스가 중단되어 남은 임시 파일을 정리합니다.
-        for entry in temporary.glob("upload-*.part"):
-            if entry.is_file() and not entry.is_symlink():
+        for entry in temporary.iterdir():
+            if (
+                entry.name.startswith(("upload-", "settings-"))
+                and entry.suffix == ".part"
+                and entry.is_file()
+                and not entry.is_symlink()
+            ):
                 entry.unlink()
         try:
             with tempfile.TemporaryFile(dir=temporary):
@@ -83,6 +131,8 @@ def create_app() -> FastAPI:
         app.state.session_seconds = int(os.environ.get("SESSION_HOURS", "12")) * 3600
         if app.state.max_upload <= 0 or app.state.session_seconds <= 0:
             raise RuntimeError("MAX_UPLOAD_MB와 SESSION_HOURS는 양수여야 합니다.")
+        app.state.settings = load_settings(root)
+        app.state.file_lock = threading.Lock()
         app.state.secure_cookie = os.environ.get("COOKIE_SECURE", "false").lower() == "true"
         app.state.salt = secrets.token_bytes(32)
         app.state.password_hash = hashlib.scrypt(
@@ -92,8 +142,25 @@ def create_app() -> FastAPI:
         app.state.attempts = defaultdict(deque)
         app.state.auth_lock = threading.Lock()
         app.state.hash_slots = threading.BoundedSemaphore(2)
-        yield
-        app.state.sessions.clear()
+
+        async def cleanup():
+            await anyio.to_thread.run_sync(
+                cleanup_expired_files, root, app.state.settings, app.state.file_lock
+            )
+
+        async def cleanup_loop():
+            while True:
+                await anyio.sleep(CLEANUP_INTERVAL_SECONDS)
+                await cleanup()
+
+        async with anyio.create_task_group() as tasks:
+            await cleanup()
+            tasks.start_soon(cleanup_loop)
+            try:
+                yield
+            finally:
+                tasks.cancel_scope.cancel()
+                app.state.sessions.clear()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -217,23 +284,61 @@ def create_app() -> FastAPI:
 
     @app.get("/api/session")
     def session_info(session: Session = Depends(session_for)):
-        return {"csrf_token": session.csrf, "max_upload_bytes": app.state.max_upload}
+        return {
+            "csrf_token": session.csrf,
+            "max_upload_bytes": app.state.max_upload,
+        }
+
+    @app.get("/api/settings")
+    def settings_info(_: Session = Depends(session_for)):
+        with app.state.file_lock:
+            return app.state.settings.model_copy()
+
+    @app.put("/api/settings")
+    def update_settings(body: AutoDeleteSettings, _: Session = Depends(require_csrf)):
+        with app.state.file_lock:
+            try:
+                save_settings(app.state.root, app.state.temporary, body)
+            except OSError as exc:
+                raise HTTPException(
+                    500, "설정을 저장하지 못했습니다. 저장 폴더의 권한과 여유 공간을 확인해 주세요."
+                ) from exc
+            # 정리 작업이 참조하는 객체를 유지하며, 두 값을 같은 잠금 안에서 갱신합니다.
+            app.state.settings.enabled = body.enabled
+            app.state.settings.retention_hours = body.retention_hours
+        return body
 
     @app.get("/api/files")
     def list_files(_: Session = Depends(session_for)):
+        with app.state.file_lock:
+            settings = app.state.settings.model_copy()
+        retention_seconds = settings.retention_hours * 3600 if settings.enabled else 0
         files = []
         with os.scandir(app.state.root) as entries:
             for entry in entries:
-                if entry.name.startswith(".") or not entry.is_file(follow_symlinks=False):
-                    continue
                 try:
                     valid_name(entry.name)
                     info = entry.stat(follow_symlinks=False)
                 except FileNotFoundError, HTTPException:
                     continue
-                files.append({"name": entry.name, "size": info.st_size, "modified": info.st_mtime})
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                files.append(
+                    {
+                        "name": entry.name,
+                        "size": info.st_size,
+                        "modified": info.st_mtime,
+                        "expires_at": (
+                            info.st_mtime + retention_seconds if retention_seconds else None
+                        ),
+                    }
+                )
         files.sort(key=lambda f: (-f["modified"], f["name"]))
-        return {"files": files, "total_bytes": sum(f["size"] for f in files)}
+        return {
+            "files": files,
+            "total_bytes": sum(f["size"] for f in files),
+            "settings": settings,
+        }
 
     @app.put("/api/files/{name:path}", status_code=201)
     async def upload(name: str, request: Request, _: Session = Depends(require_csrf)):
@@ -268,6 +373,12 @@ def create_app() -> FastAPI:
 
             # 완성된 파일만 원자적으로 공개하며, 기존 파일은 덮어쓰지 않습니다.
             def publish():
+                with app.state.file_lock:
+                    return publish_locked()
+
+            def publish_locked():
+                # 빈 파일과 오래 걸린 업로드도 저장 완료 시점부터 보관 기간을 계산합니다.
+                os.utime(path, None, follow_symlinks=False)
                 stem, suffix = os.path.splitext(name)
                 for number in range(10000):
                     if number == 0:
@@ -306,10 +417,11 @@ def create_app() -> FastAPI:
         name = valid_name(name)
         path = app.state.root / name
         try:
-            # 링크를 따라가지 않으며, 목록에서 지원하는 일반 파일만 삭제합니다.
-            if not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
-                raise HTTPException(404, "파일을 찾을 수 없습니다.")
-            path.unlink()
+            with app.state.file_lock:
+                # 링크를 따라가지 않으며, 목록에서 지원하는 일반 파일만 삭제합니다.
+                if not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
+                    raise HTTPException(404, "파일을 찾을 수 없습니다.")
+                path.unlink()
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError) as exc:
             raise HTTPException(404, "파일을 찾을 수 없습니다.") from exc
         except OSError as exc:

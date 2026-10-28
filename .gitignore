@@ -6,3 +6,4 @@ data/
 test-results/
 .ruff_cache/
 node_modules/
+AGENTS.md
