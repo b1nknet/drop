@@ -1,6 +1,6 @@
 services:
   drive:
-    build: .
+    image: ${DROP_IMAGE:-ghcr.io/b1nknet/drop:stable}
     restart: unless-stopped
     user: '${APP_UID:-1000}:${APP_GID:-1000}'
     ports:

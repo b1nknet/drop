@@ -1,0 +1,5 @@
+services:
+  drive:
+    image: drop:local
+    build: .
+    pull_policy: build

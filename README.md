@@ -20,6 +20,8 @@
 ## Docker Compose로 시작하기
 
 Docker와 Docker Compose가 설치된 환경에서 프로젝트 루트를 기준으로 실행합니다.
+기본 설정은 GitHub Container Registry(GHCR)에 게시한 이미지를 내려받아 실행합니다.
+서버에서 Python이나 Node.js를 설치하거나 이미지를 빌드할 필요가 없습니다.
 
 ### 1. 환경 설정
 
@@ -50,7 +52,8 @@ Compose는 이 폴더를 자동 생성하지 않으므로, 미리 만들고 컨�
 ### 2. 실행
 
 ```sh
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 기본 접속 주소는 [http://localhost:8080](http://localhost:8080)입니다.
@@ -77,11 +80,82 @@ Compose에도 이 경로를 호출하는 healthcheck가 설정되어 있습니�
 docker compose up -d --force-recreate
 ```
 
+### 4. 이미지 업데이트
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+`.env`의 `DROP_IMAGE`로 사용할 이미지를 선택합니다. 기본값은
+`ghcr.io/b1nknet/drop:stable`이며, 특정 버전은 `ghcr.io/b1nknet/drop:v0.1.0`,
+특정 빌드로 고정하려면 `ghcr.io/b1nknet/drop@sha256:…`처럼 지정하세요.
+컨테이너를 교체하면 로그인 세션이 만료되지만 저장 폴더의 파일은 유지됩니다.
+
+### 소스에서 직접 빌드하기
+
+게시 전이거나 로컬 수정 사항을 실행하려면 빌드용 설정을 함께 사용합니다.
+이 설정은 `DROP_IMAGE` 대신 `drop:local` 이미지를 빌드해 실행합니다.
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
+이 방식으로 실행한 서비스의 상태 확인·로그·종료에도 같은 `-f` 옵션을 사용하세요.
+
+## GitHub Actions와 GHCR 배포
+
+GitHub에서 기존 Python·웹 CI 검사가 모두 통과하면 컨테이너 이미지를 빌드하고
+`ghcr.io/b1nknet/drop`에 게시합니다. Linux AMD64와 ARM64를 지원합니다.
+
+| 실행 조건                           | 게시하는 이미지 태그                      |
+| ----------------------------------- | ----------------------------------------- |
+| `main`·`develop` 브랜치 push        | 브랜치명, `sha-<전체 커밋 SHA>`           |
+| `main` 브랜치 push                  | 위 태그와 `stable`                        |
+| 기본 브랜치 push                    | 위 태그와 `latest`                        |
+| `v*` 태그 push (예: `v0.1.0`)       | 해당 태그, `sha-<전체 커밋 SHA>`          |
+| Actions에서 CI 수동 실행            | 선택한 브랜치·태그에 해당하는 이미지 태그 |
+| `main`·`develop`을 대상으로 하는 PR | 검사만 수행하며 이미지는 게시하지 않음    |
+
+현재 저장소의 기본 브랜치는 `develop`이므로 `latest`는 `develop`을 따라갑니다.
+버전 태그를 게시해도 `latest`는 바뀌지 않습니다. 운영 버전을 고정하려면
+`DROP_IMAGE`에 버전 태그나 digest를 사용하세요.
+수동 실행도 선택한 브랜치가 기본 브랜치일 때만 `latest`를 갱신합니다.
+
+`stable`은 `main` 브랜치에 push하고 CI 검사가 통과했을 때만 갱신합니다.
+수동 실행이나 버전 태그 push는 `stable`을 갱신하지 않습니다.
+기본 Compose 설정은 `stable`을 사용합니다. 기존 `.env`에 다른 이미지가 설정되어 있다면
+다음 값으로 변경하고 `docker compose pull`과 `docker compose up -d`를 실행하세요.
+
+```dotenv
+DROP_IMAGE=ghcr.io/b1nknet/drop:stable
+```
+
+게시에는 워크플로의 `GITHUB_TOKEN`과 `packages: write` 권한을 사용하므로
+별도 게시용 PAT를 등록할 필요가 없습니다. 이 게시 작업은 GitHub에서만 실행합니다.
+빌드 캐시와 provenance·SBOM도 함께 생성합니다.
+
+처음 게시한 패키지는 기본적으로 비공개입니다. 로그인 없이 내려받게 하려면
+GitHub 패키지 설정에서 공개 범위를 Public으로 변경하세요.
+비공개로 유지한다면 서버에서 `read:packages` 권한이 있는 PAT (classic)로 먼저 로그인합니다.
+토큰은 명령에 직접 적지 말고 `--password-stdin`으로 전달하세요.
+
+```sh
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+docker compose pull
+docker compose up -d
+```
+
+인증과 패키지 공개 범위는 [GitHub Container Registry 문서](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)를 참고하세요.
+워크플로가 이미지를 게시한 뒤 서버에서 위 Compose 명령을 실행하면 배포됩니다.
+서버에 접속해 컨테이너를 자동으로 교체하는 단계는 포함하지 않습니다.
+
 ## 환경 변수
 
 | 변수                  | 기본값 또는 예제 값                    | 설명                                                                                      |
 | --------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `APP_PASSWORD`        | 예제: `changeme`                       | 모든 사용자가 공유하는 로그인 비밀번호. Compose에서는 필수이며 사용 전에 변경해야 합니다. |
+| `DROP_IMAGE`          | `ghcr.io/b1nknet/drop:stable`          | Compose에서 내려받아 실행할 이미지. 버전 태그나 digest로 고정 가능                        |
 | `UPLOAD_DIR`          | `./data`                               | Compose에서 마운트할 호스트 저장 폴더                                                     |
 | `PORT`                | `8080`                                 | Compose에서 공개할 호스트 포트                                                            |
 | `APP_UID` / `APP_GID` | `1000` / `1000`                        | Compose 컨테이너를 실행할 사용자·그룹 ID                                                  |
@@ -91,7 +165,7 @@ docker compose up -d --force-recreate
 | `COOKIE_SECURE`       | `false`                                | `true`이면 세션 쿠키를 HTTPS 연결에서만 전송                                              |
 
 `MAX_UPLOAD_MB`와 `SESSION_HOURS`는 양의 정수여야 합니다.
-`UPLOAD_DIR`, `PORT`, `APP_UID`, `APP_GID`는 Compose 설정용이며,
+`DROP_IMAGE`, `UPLOAD_DIR`, `PORT`, `APP_UID`, `APP_GID`는 Compose 설정용이며,
 Python 애플리케이션을 직접 실행할 때는 적용되지 않습니다.
 Compose 내부 저장 경로는 `/data`로 고정되어 있으므로 호스트 경로는 `UPLOAD_DIR`로 변경합니다.
 
@@ -203,8 +277,9 @@ npm run check
 
 테스트는 임시 저장 폴더를 사용하며 인증, CSRF, 업로드·다운로드·삭제, 중복 이름과 동시 업로드,
 파일명 검증, 용량 초과와 디스크 오류, 세션 만료와 재시작 동작을 확인합니다.
-CI는 `main`·`develop` 브랜치에 push하거나 두 브랜치를 대상으로 PR을 생성·갱신할 때,
-또는 수동 실행 시 Python 검사와 웹 검사를 수행합니다.
+CI는 `main`·`develop` 브랜치 또는 `v*` 태그에 push하거나 두 브랜치를 대상으로
+PR을 생성·갱신할 때, 또는 수동 실행 시 Python 검사와 웹 검사를 수행합니다.
+GitHub에서는 PR을 제외한 실행의 검사가 통과하면 GHCR 게시도 수행합니다.
 
 ## API
 
@@ -240,10 +315,11 @@ app/
     ├── app.css          # 공통 스타일과 반응형 레이아웃
     └── mark.svg         # 서비스 아이콘
 tests/test_app.py        # API와 파일 저장 동작 테스트
-.github/workflows/ci.yml # Python·웹 검사
+.github/workflows/ci.yml # Python·웹 검사와 GHCR 이미지 게시
 .env.example            # 환경 변수 예제
 Dockerfile              # Python 3.14 기반 컨테이너
 compose.yaml            # 서비스와 호스트 저장 폴더 설정
+compose.build.yaml      # 로컬 이미지 빌드용 Compose 설정
 pyproject.toml           # Python 의존성과 Ruff 설정
 uv.lock                  # Python 의존성 잠금 파일
 package.json             # 개발 도구와 검사 스크립트
