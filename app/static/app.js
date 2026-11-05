@@ -310,6 +310,20 @@ $('#settings-form').addEventListener('submit', async (event) => {
   }
 });
 
+function updateUploadSummary() {
+  let total = 0;
+  let loaded = 0;
+  let speed = 0;
+  for (const job of state.jobs) {
+    total += job.file.size;
+    loaded += job.loaded;
+    speed += job.speed;
+  }
+  $('#upload-total').textContent = bytes(total);
+  $('#upload-loaded').textContent = bytes(loaded);
+  $('#upload-speed').textContent = `${bytes(speed)}/s`;
+}
+
 function updateJob(job) {
   job.label.textContent =
     job.status === 'queued'
@@ -327,16 +341,17 @@ function updateJob(job) {
   job.progress.value = job.percent;
   job.progress.hidden = !['queued', 'uploading'].includes(job.status);
   job.cancel.hidden = !['queued', 'uploading'].includes(job.status);
+  job.transferred.textContent = `업로드 ${bytes(job.loaded)} / 전체 ${bytes(job.file.size)}`;
+  job.speedLabel.textContent = `${bytes(job.speed)}/s`;
   job.message.textContent =
-    job.error ||
-    (job.stored && job.stored !== job.file.name
-      ? `${bytes(job.file.size)} · ${job.stored}(으)로 저장됨`
-      : bytes(job.file.size));
+    job.error || (job.stored && job.stored !== job.file.name ? `${job.stored}(으)로 저장됨` : '');
+  job.message.hidden = !job.message.textContent;
+  updateUploadSummary();
 }
 
 function addFiles(files) {
   for (const file of files) {
-    const job = { file, percent: 0, status: 'queued', error: '', xhr: null };
+    const job = { file, loaded: 0, speed: 0, percent: 0, status: 'queued', error: '', xhr: null };
     job.row = element('li', 'upload-job');
     const symbol = element('div', 'job-icon');
     symbol.append(icon('file'));
@@ -344,10 +359,15 @@ function addFiles(files) {
     const name = element('strong', 'job-name', file.name);
     name.title = file.name;
     job.message = element('span', 'job-message');
+    const transfer = element('div', 'job-transfer');
+    job.transferred = element('span');
+    job.speedLabel = element('span');
+    job.speedLabel.setAttribute('aria-label', '업로드 속도');
+    transfer.append(job.transferred, job.speedLabel);
     job.progress = element('progress');
     job.progress.max = 100;
     job.progress.setAttribute('aria-label', `${file.name} 업로드 진행률`);
-    info.append(name, job.message, job.progress);
+    info.append(name, transfer, job.message, job.progress);
     job.label = element('span', 'job-status');
     job.cancel = element('button', 'icon-button cancel-upload', '×');
     job.cancel.type = 'button';
@@ -381,15 +401,33 @@ function uploadFile(job) {
     xhr.open('PUT', `/api/files/${encodeURIComponent(job.file.name)}`);
     xhr.setRequestHeader('X-CSRF-Token', state.csrf);
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    let sampledAt = performance.now();
+    let sampledBytes = 0;
+    const speedTimer = setInterval(() => {
+      const now = performance.now();
+      const elapsed = (now - sampledAt) / 1000;
+      job.speed = elapsed > 0 ? (job.loaded - sampledBytes) / elapsed : 0;
+      sampledAt = now;
+      sampledBytes = job.loaded;
+      updateJob(job);
+    }, 500);
     xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        job.percent = Math.round((event.loaded / event.total) * 100);
-        updateJob(job);
-      }
+      job.loaded = Math.min(event.loaded, job.file.size);
+      job.percent = job.file.size ? Math.floor((job.loaded / job.file.size) * 100) : 100;
+      updateJob(job);
+    };
+    xhr.upload.onload = () => {
+      clearInterval(speedTimer);
+      job.loaded = job.file.size;
+      job.percent = 100;
+      job.speed = 0;
+      updateJob(job);
     };
     function finish(status, error = '') {
+      clearInterval(speedTimer);
       job.status = status;
       job.error = error;
+      job.speed = 0;
       job.xhr = null;
       updateJob(job);
       resolve();
@@ -407,6 +445,7 @@ function uploadFile(job) {
         /* 프록시의 HTML 오류 응답도 처리합니다. */
       }
       if (xhr.status >= 200 && xhr.status < 300) {
+        job.loaded = job.file.size;
         job.percent = 100;
         job.stored = body.name;
         finish('done');
@@ -463,6 +502,7 @@ $('#clear-uploads').addEventListener('click', () => {
     return false;
   });
   $('#upload-panel').hidden = state.jobs.length === 0;
+  updateUploadSummary();
 });
 $('#logout').addEventListener('click', async () => {
   if (state.running) {

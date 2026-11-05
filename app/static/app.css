@@ -770,6 +770,35 @@ tbody tr:hover {
 .upload-panel-heading .text-button {
   font-size: 10px;
 }
+.upload-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 14px 0 18px;
+  font-variant-numeric: tabular-nums;
+}
+.upload-summary dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+.upload-summary dd {
+  margin: 7px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.job-transfer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+.job-transfer span {
+  white-space: nowrap;
+}
 .upload-list {
   list-style: none;
   padding: 0;
