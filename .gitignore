@@ -7,3 +7,4 @@ test-results/
 .ruff_cache/
 node_modules/
 AGENTS.md
+compose.yaml
