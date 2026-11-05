@@ -373,11 +373,10 @@ function addFiles(files) {
     job.cancel.type = 'button';
     job.cancel.setAttribute('aria-label', `${file.name} 업로드 취소`);
     job.cancel.addEventListener('click', () => {
-      if (job.xhr) job.xhr.abort();
-      else {
-        job.status = 'cancelled';
-        updateJob(job);
-      }
+      job.cancelled = true;
+      job.status = 'cancelled';
+      job.xhr?.abort();
+      updateJob(job);
     });
     if (file.size > state.limit) {
       job.status = 'error';
@@ -392,81 +391,122 @@ function addFiles(files) {
   processQueue();
 }
 
-function uploadFile(job) {
-  return new Promise((resolve) => {
+function uploadRequest(job, method, url, body = null, onProgress) {
+  return new Promise((resolve, reject) => {
+    if (job.cancelled) {
+      reject(new Error('업로드를 취소했어요.'));
+      return;
+    }
     const xhr = new XMLHttpRequest();
     job.xhr = xhr;
-    job.status = 'uploading';
-    updateJob(job);
-    xhr.open('PUT', `/api/files/${encodeURIComponent(job.file.name)}`);
+    xhr.open(method, url);
     xhr.setRequestHeader('X-CSRF-Token', state.csrf);
-    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-    let sampledAt = performance.now();
-    let sampledBytes = 0;
-    const speedTimer = setInterval(() => {
-      const now = performance.now();
-      const elapsed = (now - sampledAt) / 1000;
-      job.speed = elapsed > 0 ? (job.loaded - sampledBytes) / elapsed : 0;
-      sampledAt = now;
-      sampledBytes = job.loaded;
-      updateJob(job);
-    }, 500);
-    xhr.upload.onprogress = (event) => {
-      job.loaded = Math.min(event.loaded, job.file.size);
-      job.percent = job.file.size ? Math.floor((job.loaded / job.file.size) * 100) : 100;
-      updateJob(job);
-    };
-    xhr.upload.onload = () => {
-      clearInterval(speedTimer);
-      job.loaded = job.file.size;
-      job.percent = 100;
-      job.speed = 0;
-      updateJob(job);
-    };
-    function finish(status, error = '') {
-      clearInterval(speedTimer);
-      job.status = status;
-      job.error = error;
-      job.speed = 0;
+    if (body !== null) {
+      xhr.setRequestHeader(
+        'Content-Type',
+        typeof body === 'string' ? 'application/json' : 'application/octet-stream',
+      );
+    }
+    if (onProgress) xhr.upload.onprogress = (event) => onProgress(event.loaded);
+    function fail(message) {
       job.xhr = null;
-      updateJob(job);
-      resolve();
+      reject(new Error(message));
     }
     xhr.onload = () => {
+      job.xhr = null;
       if (xhr.status === 401) {
         expire();
-        finish('error', '로그인이 만료되었어요.');
+        fail('로그인이 만료되었어요.');
         return;
       }
-      let body = {};
+      let data = {};
       try {
-        body = JSON.parse(xhr.responseText);
+        data = JSON.parse(xhr.responseText);
       } catch {
         /* 프록시의 HTML 오류 응답도 처리합니다. */
       }
       if (xhr.status >= 200 && xhr.status < 300) {
-        job.loaded = job.file.size;
-        job.percent = 100;
-        job.stored = body.name;
-        finish('done');
+        resolve(data);
       } else {
-        finish(
-          'error',
-          typeof body.detail === 'string'
-            ? body.detail
+        fail(
+          typeof data.detail === 'string'
+            ? data.detail
             : `업로드하지 못했어요. (HTTP ${xhr.status})`,
         );
       }
     };
     xhr.onerror = () =>
-      finish(
-        'error',
-        '연결이 끊겼어요. 파일 목록을 새로고침해 저장 여부를 확인한 뒤 다시 선택해 주세요.',
-      );
-    xhr.onabort = () =>
-      finish('cancelled', '전송을 취소했어요. 이미 저장된 파일은 목록에서 확인할 수 있어요.');
-    xhr.send(job.file);
+      fail('연결이 끊겼어요. 파일 목록을 새로고침해 저장 여부를 확인한 뒤 다시 선택해 주세요.');
+    xhr.onabort = () => fail('업로드를 취소했어요.');
+    xhr.send(body);
   });
+}
+
+async function uploadFile(job) {
+  job.status = 'uploading';
+  updateJob(job);
+  let upload;
+  let sampledAt = performance.now();
+  let sampledBytes = 0;
+  const speedTimer = setInterval(() => {
+    const now = performance.now();
+    const elapsed = (now - sampledAt) / 1000;
+    job.speed = elapsed > 0 ? (job.loaded - sampledBytes) / elapsed : 0;
+    sampledAt = now;
+    sampledBytes = job.loaded;
+    updateJob(job);
+  }, 500);
+  function progress(loaded) {
+    job.loaded = Math.min(loaded, job.file.size);
+    job.percent = job.file.size ? Math.floor((job.loaded / job.file.size) * 100) : 100;
+    updateJob(job);
+  }
+  try {
+    upload = await uploadRequest(
+      job,
+      'POST',
+      '/api/uploads',
+      JSON.stringify({ name: job.file.name, size: job.file.size }),
+    );
+    for (let offset = 0; offset < job.file.size; offset += upload.chunk_size) {
+      const end = Math.min(offset + upload.chunk_size, job.file.size);
+      const result = await uploadRequest(
+        job,
+        'PUT',
+        `/api/uploads/${upload.id}?offset=${offset}`,
+        job.file.slice(offset, end),
+        (loaded) => progress(offset + Math.min(loaded, end - offset)),
+      );
+      if (result.offset !== end)
+        throw new Error('전송 위치를 확인하지 못했어요. 다시 선택해 주세요.');
+      progress(end);
+    }
+    const stored = await uploadRequest(job, 'POST', `/api/uploads/${upload.id}/complete`);
+    job.stored = stored.name;
+    job.status = 'done';
+    progress(job.file.size);
+  } catch (failure) {
+    job.status = job.cancelled ? 'cancelled' : 'error';
+    job.error = job.cancelled
+      ? '전송을 취소했어요. 이미 저장된 파일은 목록에서 확인할 수 있어요.'
+      : failure.message;
+  } finally {
+    clearInterval(speedTimer);
+    job.speed = 0;
+    job.xhr = null;
+    updateJob(job);
+    if (upload?.id && job.status !== 'done') {
+      try {
+        await fetch(`/api/uploads/${upload.id}`, {
+          method: 'DELETE',
+          headers: { 'X-CSRF-Token': state.csrf },
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch {
+        // 서버에 연결할 수 없으면 만료 정리 작업이 임시 파일을 삭제합니다.
+      }
+    }
+  }
 }
 
 async function processQueue() {

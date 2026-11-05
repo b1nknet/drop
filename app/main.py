@@ -18,12 +18,13 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import anyio
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.requests import ClientDisconnect
 
 from app.settings import AutoDeleteSettings, load_settings, save_settings
+from app.uploads import UploadStore, publish_file
 
 ASSETS = Path(__file__).parent / "static"
 COOKIE_NAME = "drop_session"
@@ -42,6 +43,11 @@ class Session:
 
 class LoginBody(BaseModel):
     password: str = Field(max_length=1024)
+
+
+class UploadBody(BaseModel):
+    name: str = Field(max_length=240)
+    size: int = Field(ge=0, strict=True)
 
 
 def valid_name(name: str) -> str:
@@ -127,12 +133,13 @@ def create_app() -> FastAPI:
             ) from exc
         app.state.root = root
         app.state.temporary = temporary
-        app.state.max_upload = int(os.environ.get("MAX_UPLOAD_MB", "1024")) * 1024 * 1024
+        app.state.max_upload = int(os.environ.get("MAX_UPLOAD_MB", "10240")) * 1024 * 1024
         app.state.session_seconds = int(os.environ.get("SESSION_HOURS", "12")) * 3600
         if app.state.max_upload <= 0 or app.state.session_seconds <= 0:
             raise RuntimeError("MAX_UPLOAD_MB와 SESSION_HOURS는 양수여야 합니다.")
         app.state.settings = load_settings(root)
         app.state.file_lock = threading.Lock()
+        app.state.uploads = UploadStore(root, temporary, app.state.max_upload, app.state.file_lock)
         app.state.secure_cookie = os.environ.get("COOKIE_SECURE", "false").lower() == "true"
         app.state.salt = secrets.token_bytes(32)
         app.state.password_hash = hashlib.scrypt(
@@ -144,6 +151,9 @@ def create_app() -> FastAPI:
         app.state.hash_slots = threading.BoundedSemaphore(2)
 
         async def cleanup():
+            app.state.uploads.cleanup(
+                {s.csrf for s in list(app.state.sessions.values()) if s.expires > time.time()}
+            )
             await anyio.to_thread.run_sync(
                 cleanup_expired_files, root, app.state.settings, app.state.file_lock
             )
@@ -161,6 +171,7 @@ def create_app() -> FastAPI:
             finally:
                 tasks.cancel_scope.cancel()
                 app.state.sessions.clear()
+                app.state.uploads.cleanup(set())
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -340,6 +351,29 @@ def create_app() -> FastAPI:
             "settings": settings,
         }
 
+    @app.post("/api/uploads", status_code=201)
+    async def start_upload(body: UploadBody, session: Session = Depends(require_csrf)):
+        return app.state.uploads.start(
+            valid_name(body.name), body.size, session.csrf, session.expires
+        )
+
+    @app.put("/api/uploads/{upload_id}")
+    async def upload_chunk(
+        upload_id: str,
+        request: Request,
+        offset: int = Query(ge=0),
+        session: Session = Depends(require_csrf),
+    ):
+        return await app.state.uploads.append(upload_id, session.csrf, offset, request)
+
+    @app.post("/api/uploads/{upload_id}/complete", status_code=201)
+    async def complete_upload(upload_id: str, session: Session = Depends(require_csrf)):
+        return await app.state.uploads.complete(upload_id, session.csrf)
+
+    @app.delete("/api/uploads/{upload_id}")
+    async def cancel_upload(upload_id: str, session: Session = Depends(require_csrf)):
+        return app.state.uploads.cancel(upload_id, session.csrf)
+
     @app.put("/api/files/{name:path}", status_code=201)
     async def upload(name: str, request: Request, _: Session = Depends(require_csrf)):
         name = valid_name(name)
@@ -371,34 +405,9 @@ def create_app() -> FastAPI:
                 await anyio.to_thread.run_sync(destination.flush)
                 await anyio.to_thread.run_sync(os.fsync, destination.fileno())
 
-            # 완성된 파일만 원자적으로 공개하며, 기존 파일은 덮어쓰지 않습니다.
-            def publish():
-                with app.state.file_lock:
-                    return publish_locked()
-
-            def publish_locked():
-                # 빈 파일과 오래 걸린 업로드도 저장 완료 시점부터 보관 기간을 계산합니다.
-                os.utime(path, None, follow_symlinks=False)
-                stem, suffix = os.path.splitext(name)
-                for number in range(10000):
-                    if number == 0:
-                        candidate = name
-                    else:
-                        marker = f" ({number})"
-                        base, extension = stem, suffix
-                        if len((marker + extension).encode()) > 240:
-                            base, extension = name, ""
-                        budget = 240 - len((marker + extension).encode())
-                        base = base.encode()[:budget].decode("utf-8", errors="ignore")
-                        candidate = f"{base}{marker}{extension}"
-                    try:
-                        os.link(path, app.state.root / candidate, follow_symlinks=False)
-                        return candidate
-                    except FileExistsError:
-                        continue
-                raise HTTPException(409, "같은 이름의 파일이 너무 많습니다. 이름을 변경해 주세요.")
-
-            stored_name = await anyio.to_thread.run_sync(publish)
+            stored_name = await anyio.to_thread.run_sync(
+                publish_file, path, app.state.root, name, app.state.file_lock
+            )
             return {"name": stored_name, "size": size}
         except ClientDisconnect as exc:
             raise HTTPException(400, "업로드 연결이 끊겼습니다.") from exc
