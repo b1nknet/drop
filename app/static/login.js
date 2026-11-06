@@ -37,3 +37,6 @@ form.addEventListener('submit', async (event) => {
     submit.querySelector('span').textContent = '로그인';
   }
 });
+
+// 제출 처리가 준비된 뒤에만 로그인 버튼을 활성화합니다.
+submit.disabled = false;

@@ -76,7 +76,7 @@
         </div>
         <h2 id="login-title">반가워요.</h2>
         <p class="muted">비밀번호를 입력해 로그인하세요.</p>
-        <form id="login-form">
+        <form id="login-form" method="post" action="/api/login">
           <label for="password">비밀번호</label>
           <div class="password-field">
             <input
@@ -106,7 +106,10 @@
             </button>
           </div>
           <p id="login-error" class="form-error" role="alert"></p>
-          <button class="primary login-submit" type="submit">
+          <noscript>
+            <p class="form-error">로그인하려면 브라우저에서 JavaScript를 활성화해 주세요.</p>
+          </noscript>
+          <button class="primary login-submit" type="submit" disabled>
             <span>로그인</span
             ><svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path
